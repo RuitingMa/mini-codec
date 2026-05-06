@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.python-version
+
+# uv / poetry
+uv.lock
+poetry.lock
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Experiment artifacts — checkpoints/audio/wandb cache should never be committed.
+runs/
+checkpoints/
+outputs/
+wandb/
+*.ckpt
+*.pt
+*.pth
+
+# Datasets — big, shouldn't live in git. Keep a manifest in configs/ instead.
+# Anchored to root with leading / so we don't accidentally ignore src/data/.
+/data/
+/datasets/
+*.wav
+*.flac
+*.mp3
+# but allow short reference samples used by tests
+!tests/fixtures/*.wav
+
+# Working notes — kept local during development.
+# The final report and any public-facing docs will live in a separate folder
+# (e.g. report/) added in W9-W11.
+docs/
+
+# Reports — LaTeX intermediate artifacts
+*.aux
+*.log
+*.out
+*.synctex.gz
