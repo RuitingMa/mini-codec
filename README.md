@@ -41,18 +41,25 @@ mini-codec/
 └── tests/          # unit tests for the core modules
 ```
 
-## Quickstart (placeholder)
+## Quickstart
 
 ```bash
-# install (uv-based, see pyproject.toml)
-uv sync
+# create env (conda; Python 3.11)
+conda create -n mini-codec python=3.11 -y
+conda activate mini-codec
+
+# install project + dev tooling in editable mode
+pip install -e ".[dev]"
 
 # run unit tests
-uv run pytest
+pytest
 
 # train baseline (placeholder — config will land in W2-W3)
-uv run python -m src.train --config configs/baseline.yaml
+python -m src.train --config configs/baseline.yaml
 ```
+
+> The local env installs PyTorch CPU wheels by default; GPU training is intended
+> to run on Colab Pro / RunPod, with a separate setup documented closer to W3.
 
 ## References
 
