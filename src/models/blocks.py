@@ -5,6 +5,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.nn.utils.parametrizations import weight_norm as wn
 
 
 def asymmetric_pad1d(x: torch.Tensor, kernel_size: int, stride: int) -> torch.Tensor:
@@ -28,8 +29,8 @@ class ResidualBlock(nn.Module):
 
     def __init__(self, channels: int) -> None:
         super().__init__()
-        self.conv1 = nn.Conv1d(channels, channels, kernel_size=3, padding=1, dilation=1)
-        self.conv2 = nn.Conv1d(channels, channels, kernel_size=3, padding=3, dilation=3)
+        self.conv1 = wn(nn.Conv1d(channels, channels, kernel_size=3, padding=1, dilation=1))
+        self.conv2 = wn(nn.Conv1d(channels, channels, kernel_size=3, padding=3, dilation=3))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         y = F.elu(x)

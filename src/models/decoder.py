@@ -11,7 +11,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .blocks import ResidualBlock
+from .blocks import ResidualBlock, wn
 
 
 def _transpose_padding(stride: int) -> tuple[int, int]:
@@ -32,14 +32,14 @@ class DecoderBlock(nn.Module):
         super().__init__()
         kernel = 2 * stride
         padding, output_padding = _transpose_padding(stride)
-        self.upsample = nn.ConvTranspose1d(
+        self.upsample = wn(nn.ConvTranspose1d(
             channels,
             channels // 2,
             kernel_size=kernel,
             stride=stride,
             padding=padding,
             output_padding=output_padding,
-        )
+        ))
         self.residual = ResidualBlock(channels // 2)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -67,7 +67,7 @@ class Decoder(nn.Module):
         self.strides = tuple(strides)
 
         c = base_channels * (2 ** len(self.strides))
-        self.head = nn.Conv1d(latent_dim, c, kernel_size=7, padding=3)
+        self.head = wn(nn.Conv1d(latent_dim, c, kernel_size=7, padding=3))
 
         blocks: list[nn.Module] = []
         for s in reversed(self.strides):
@@ -75,7 +75,7 @@ class Decoder(nn.Module):
             c //= 2
         self.blocks = nn.Sequential(*blocks)
 
-        self.tail = nn.Conv1d(c, out_channels, kernel_size=7, padding=3)
+        self.tail = wn(nn.Conv1d(c, out_channels, kernel_size=7, padding=3))
 
     def forward(self, z: torch.Tensor) -> torch.Tensor:
         x = self.head(z)

@@ -12,7 +12,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .blocks import ResidualBlock, asymmetric_pad1d
+from .blocks import ResidualBlock, asymmetric_pad1d, wn
 
 
 class EncoderBlock(nn.Module):
@@ -28,9 +28,9 @@ class EncoderBlock(nn.Module):
         self.stride = stride
         self.kernel = 2 * stride
         self.residual = ResidualBlock(channels)
-        self.downsample = nn.Conv1d(
+        self.downsample = wn(nn.Conv1d(
             channels, 2 * channels, kernel_size=self.kernel, stride=stride, padding=0
-        )
+        ))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.residual(x)
@@ -61,7 +61,7 @@ class Encoder(nn.Module):
         for s in self.strides:
             self.total_downsample *= s
 
-        self.stem = nn.Conv1d(in_channels, base_channels, kernel_size=7, padding=3)
+        self.stem = wn(nn.Conv1d(in_channels, base_channels, kernel_size=7, padding=3))
 
         c = base_channels
         blocks: list[nn.Module] = []
@@ -69,7 +69,7 @@ class Encoder(nn.Module):
             blocks.append(EncoderBlock(c, s))
             c *= 2
         self.blocks = nn.Sequential(*blocks)
-        self.head = nn.Conv1d(c, latent_dim, kernel_size=7, padding=3)
+        self.head = wn(nn.Conv1d(c, latent_dim, kernel_size=7, padding=3))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.stem(x)
