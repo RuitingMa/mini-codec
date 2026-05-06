@@ -12,9 +12,14 @@ is gitignored.
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
-from src.data.librispeech import download_librispeech
+# Make `src.*` importable when this script is run as `python scripts/foo.py`,
+# which puts scripts/ on sys.path instead of the project root.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from src.data.librispeech import download_librispeech  # noqa: E402
 
 
 def main() -> None:
