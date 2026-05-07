@@ -49,8 +49,13 @@ train:
   out_dir: outputs/baseline
   seed: 0
 
-wandb:
-  project: mini-codec
-  entity: rmaa0045-monash-university   # null => personal default entity
-  enabled: false            # turned on by passing --wandb at the CLI
-  run_name: null            # null => wandb auto-generates a name
+logger:
+  # one of: none, tensorboard, wandb
+  # tensorboard writes to <train.out_dir>/tb/ and needs no extra setup;
+  # wandb requires a logged-in account and uses the wandb section below.
+  type: none
+
+  wandb:
+    project: mini-codec
+    entity: rmaa0045-monash-university   # null => personal default entity
+    run_name: null            # null => wandb auto-generates a name

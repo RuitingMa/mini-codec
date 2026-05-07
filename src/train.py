@@ -7,8 +7,9 @@ commitment losses (no adversarial term — see project memo).
 Run:
     python -m src.train --config configs/baseline.yaml [overrides]
 
-Common overrides: --total-steps, --batch-size, --lr, --out-dir, --wandb.
-Anything more specialised should go in the yaml directly.
+Common overrides: --total-steps, --batch-size, --lr, --out-dir,
+--logger {none,tensorboard,wandb}. Anything more specialised should
+go in the yaml directly.
 """
 
 from __future__ import annotations
@@ -37,9 +38,15 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--lr", type=float, default=None)
     p.add_argument("--out-dir", type=Path, default=None)
     p.add_argument(
+        "--logger",
+        choices=["none", "tensorboard", "wandb"],
+        default=None,
+        help="Override logger.type. Defaults to whatever the yaml says.",
+    )
+    p.add_argument(
         "--wandb",
         action="store_true",
-        help="Enable wandb logging regardless of the yaml's wandb.enabled flag.",
+        help="Shortcut for --logger wandb.",
     )
     return p.parse_args()
 
@@ -54,9 +61,71 @@ def load_config(path: Path, args: argparse.Namespace) -> dict:
         cfg["optim"]["lr"] = args.lr
     if args.out_dir is not None:
         cfg["train"]["out_dir"] = str(args.out_dir)
+    if args.logger is not None:
+        cfg["logger"]["type"] = args.logger
     if args.wandb:
-        cfg["wandb"]["enabled"] = True
+        cfg["logger"]["type"] = "wandb"
     return cfg
+
+
+class _NoOpLogger:
+    def log(self, metrics: dict, step: int) -> None:
+        pass
+
+    def finish(self) -> None:
+        pass
+
+
+class _TensorboardLogger:
+    """Thin wrapper over ``torch.utils.tensorboard.SummaryWriter``.
+
+    Writes scalars under ``<out_dir>/tb/`` so AutoDL's built-in
+    TensorBoard service (or a local ``tensorboard --logdir``) picks them
+    up automatically. Avoids any external network dependency.
+    """
+
+    def __init__(self, log_dir: Path) -> None:
+        from torch.utils.tensorboard import SummaryWriter
+
+        log_dir.mkdir(parents=True, exist_ok=True)
+        self.writer = SummaryWriter(log_dir=str(log_dir))
+
+    def log(self, metrics: dict, step: int) -> None:
+        for k, v in metrics.items():
+            self.writer.add_scalar(k, v, step)
+
+    def finish(self) -> None:
+        self.writer.close()
+
+
+class _WandbLogger:
+    def __init__(self, cfg: dict) -> None:
+        import wandb
+
+        self._wandb = wandb
+        wandb.init(
+            project=cfg["wandb"]["project"],
+            entity=cfg["wandb"].get("entity"),
+            name=cfg["wandb"].get("run_name"),
+            config=cfg,
+        )
+
+    def log(self, metrics: dict, step: int) -> None:
+        self._wandb.log(metrics, step=step)
+
+    def finish(self) -> None:
+        self._wandb.finish()
+
+
+def make_logger(cfg: dict, out_dir: Path):
+    typ = cfg["logger"]["type"]
+    if typ == "none":
+        return _NoOpLogger()
+    if typ == "tensorboard":
+        return _TensorboardLogger(out_dir / "tb")
+    if typ == "wandb":
+        return _WandbLogger(cfg["logger"])
+    raise ValueError(f"unknown logger.type: {typ!r}")
 
 
 def build_model(cfg: dict) -> tuple[Encoder, ResidualVectorQuantizer, Decoder]:
@@ -140,18 +209,9 @@ def main() -> None:
         betas=tuple(cfg["optim"]["betas"]),
     )
 
-    # --- wandb (lazy import; only required when enabled) ---
-    use_wandb = bool(cfg["wandb"]["enabled"])
-    wandb = None
-    if use_wandb:
-        import wandb as _wandb
-        wandb = _wandb
-        wandb.init(
-            project=cfg["wandb"]["project"],
-            entity=cfg["wandb"].get("entity"),
-            name=cfg["wandb"].get("run_name"),
-            config=cfg,
-        )
+    # --- logger (none / tensorboard / wandb; lazy import for wandb) ---
+    logger = make_logger(cfg, out_dir)
+    print(f"logger: {cfg['logger']['type']}")
 
     # --- train loop ---
     train_cfg = cfg["train"]
@@ -194,20 +254,19 @@ def main() -> None:
                 f"{step:>6} | {l1.item():>7.4f} | {s.item():>7.4f} | "
                 f"{c_loss.item():>7.4f} | {loss.item():>7.4f} | {active}"
             )
-            if use_wandb:
-                wandb.log(
-                    {
-                        "loss/l1": l1.item(),
-                        "loss/stft": s.item(),
-                        "loss/commit": c_loss.item(),
-                        "loss/total": loss.item(),
-                        **{
-                            f"codebook/active_layer_{i}": a
-                            for i, a in enumerate(active)
-                        },
+            logger.log(
+                {
+                    "loss/l1": l1.item(),
+                    "loss/stft": s.item(),
+                    "loss/commit": c_loss.item(),
+                    "loss/total": loss.item(),
+                    **{
+                        f"codebook/active_layer_{i}": a
+                        for i, a in enumerate(active)
                     },
-                    step=step,
-                )
+                },
+                step=step,
+            )
 
         if (
             step % train_cfg["ckpt_every"] == 0
@@ -232,8 +291,7 @@ def main() -> None:
         f"\ndone in {elapsed:.1f}s "
         f"({elapsed / train_cfg['total_steps'] * 1000:.0f} ms/step)"
     )
-    if use_wandb:
-        wandb.finish()
+    logger.finish()
 
 
 if __name__ == "__main__":
