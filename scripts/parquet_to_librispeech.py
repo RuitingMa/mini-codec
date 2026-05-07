@@ -44,10 +44,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--dst",
         type=Path,
-        required=True,
+        default=None,
         help="Output directory; will be populated with <spk>/<chap>/*.flac. "
         "Pass datasets/LibriSpeech/train-clean-100 (or test-clean, etc.) "
-        "to match the layout LibriSpeechSegments looks for.",
+        "to match the layout LibriSpeechSegments looks for. Required unless "
+        "--inspect-only is set.",
     )
     p.add_argument(
         "--inspect-only",
@@ -136,8 +137,10 @@ def main() -> None:
     args = parse_args()
     if args.inspect_only:
         inspect(args.src)
-    else:
-        convert(args.src, args.dst)
+        return
+    if args.dst is None:
+        raise SystemExit("--dst is required for actual conversion (omit only with --inspect-only)")
+    convert(args.src, args.dst)
 
 
 if __name__ == "__main__":
