@@ -84,7 +84,7 @@ def inspect(src: Path) -> None:
             print(f"  {k}: {v!r}")
 
 
-def convert(src: Path, dst: Path) -> None:
+def convert(src: Path, dst: Path, batch_size: int = 64) -> None:
     parquets = sorted(src.glob("*.parquet"))
     if not parquets:
         raise SystemExit(f"no parquet files in {src}")
@@ -92,33 +92,44 @@ def convert(src: Path, dst: Path) -> None:
 
     n_written = 0
     for shard in parquets:
-        # Pull only the columns we need. Each shard is ~450 MB on disk and
-        # ~1 GB once decoded into Python lists; processing one at a time
-        # keeps peak memory predictable.
-        table = pq.read_table(
-            shard, columns=["audio", "speaker_id", "chapter_id", "id"]
-        )
-        n_rows = table.num_rows
+        # Stream the parquet in small row batches instead of loading the whole
+        # shard into a Python list. Each shard is ~450 MB on disk; .to_pylist()
+        # over the whole audio column takes >1 GB of RAM (every utterance is a
+        # ~250 KB Python bytes object plus container overhead), which OOMs on
+        # AutoDL's no-GPU instances. 64 rows / batch keeps the peak well
+        # under 100 MB.
+        parquet_file = pq.ParquetFile(shard)
+        n_rows = parquet_file.metadata.num_rows
         print(f"\n{shard.name}: {n_rows:,} utterances")
 
-        audio_col = table.column("audio").to_pylist()
-        spk_col = table.column("speaker_id").to_pylist()
-        chap_col = table.column("chapter_id").to_pylist()
-        id_col = table.column("id").to_pylist()
-
-        for audio, spk, chap, utt_id in tqdm(
-            zip(audio_col, spk_col, chap_col, id_col), total=n_rows, unit="utt"
+        progress = tqdm(total=n_rows, unit="utt")
+        for batch in parquet_file.iter_batches(
+            batch_size=batch_size,
+            columns=["audio", "speaker_id", "chapter_id", "id"],
         ):
-            target = dst / str(spk) / str(chap) / f"{utt_id}.flac"
-            target.parent.mkdir(parents=True, exist_ok=True)
-            audio_bytes = audio["bytes"] if isinstance(audio, dict) else audio
-            if audio_bytes is None:
-                raise RuntimeError(
-                    f"row for id={utt_id} has no audio bytes — schema may not "
-                    "match what this script expects; rerun with --inspect-only."
+            audio_col = batch.column("audio").to_pylist()
+            spk_col = batch.column("speaker_id").to_pylist()
+            chap_col = batch.column("chapter_id").to_pylist()
+            id_col = batch.column("id").to_pylist()
+
+            for audio, spk, chap, utt_id in zip(
+                audio_col, spk_col, chap_col, id_col
+            ):
+                target = dst / str(spk) / str(chap) / f"{utt_id}.flac"
+                target.parent.mkdir(parents=True, exist_ok=True)
+                audio_bytes = (
+                    audio["bytes"] if isinstance(audio, dict) else audio
                 )
-            target.write_bytes(audio_bytes)
-            n_written += 1
+                if audio_bytes is None:
+                    raise RuntimeError(
+                        f"row for id={utt_id} has no audio bytes — schema may "
+                        "not match what this script expects; rerun with "
+                        "--inspect-only."
+                    )
+                target.write_bytes(audio_bytes)
+                n_written += 1
+                progress.update(1)
+        progress.close()
 
     print(f"\nwrote {n_written:,} flac files under {dst}")
 
