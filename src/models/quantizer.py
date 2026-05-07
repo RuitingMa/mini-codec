@@ -213,6 +213,9 @@ class ResidualVectorQuantizer(nn.Module):
         dim: int = 128,
         decay: float = 0.99,
         commitment_weight: float = 1.0,
+        kmeans_init: bool = True,
+        dead_code_threshold: float = 0.01,
+        dead_code_steps: int = 20,
     ) -> None:
         super().__init__()
         self.num_quantizers = num_quantizers
@@ -225,6 +228,9 @@ class ResidualVectorQuantizer(nn.Module):
                     dim=dim,
                     decay=decay,
                     commitment_weight=commitment_weight,
+                    kmeans_init=kmeans_init,
+                    dead_code_threshold=dead_code_threshold,
+                    dead_code_steps=dead_code_steps,
                 )
                 for _ in range(num_quantizers)
             ]

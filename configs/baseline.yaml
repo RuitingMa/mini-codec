@@ -1,0 +1,56 @@
+# Mini-codec baseline training config.
+#
+# Defaults are tuned for a local CPU sanity run (100 steps). For real
+# training on Colab / RunPod, override total_steps and batch_size from the
+# command line, e.g.:
+#   python -m src.train --config configs/baseline.yaml \
+#     --total-steps 50000 --batch-size 32 --wandb
+
+data:
+  root: datasets
+  split: dev-clean
+  sample_rate: 16000
+  segment_seconds: 1.0
+  batch_size: 16
+  num_workers: 0  # Windows + soundfile is happiest in-thread; bump to 4 on Linux.
+
+model:
+  encoder:
+    base_channels: 32
+    strides: [2, 4, 5, 5]   # 200x downsampling -> 80 Hz frame rate at 16 kHz
+    latent_dim: 128
+  decoder:
+    base_channels: 32
+    strides: [2, 4, 5, 5]   # mirror of the encoder
+    latent_dim: 128
+  quantizer:
+    num_quantizers: 4
+    codebook_size: 1024     # 4 * log2(1024) * 80 Hz = 3.2 kbps
+    decay: 0.99
+    dead_code_steps: 20
+    dead_code_threshold: 0.01
+
+loss:
+  l1_weight: 0.1            # Encodec §3.4 default
+  stft_weight: 1.0
+  commitment_weight: 1.0
+  stft:
+    window_sizes: [64, 128, 256, 512, 1024, 2048]
+    n_mels: 64
+
+optim:
+  lr: 3.0e-4
+  betas: [0.9, 0.99]
+
+train:
+  total_steps: 100          # raise to 50000+ for a real run
+  log_every: 10
+  ckpt_every: 100
+  out_dir: outputs/baseline
+  seed: 0
+
+wandb:
+  project: mini-codec
+  entity: rmaa0045-monash-university   # null => personal default entity
+  enabled: false            # turned on by passing --wandb at the CLI
+  run_name: null            # null => wandb auto-generates a name
