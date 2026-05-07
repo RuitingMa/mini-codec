@@ -168,6 +168,9 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "config.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
 
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"device: {device}{' (' + torch.cuda.get_device_name(0) + ')' if device.type == 'cuda' else ''}")
+
     # --- data ---
     d = cfg["data"]
     ds = LibriSpeechSegments(
@@ -183,6 +186,7 @@ def main() -> None:
         shuffle=True,
         num_workers=d["num_workers"],
         drop_last=True,
+        pin_memory=device.type == "cuda",
     )
     print(
         f"dataset: {len(ds)} utterances, {len(dl)} batches/epoch "
@@ -196,6 +200,10 @@ def main() -> None:
         window_sizes=tuple(cfg["loss"]["stft"]["window_sizes"]),
         n_mels=cfg["loss"]["stft"]["n_mels"],
     )
+    enc.to(device)
+    rvq.to(device)
+    dec.to(device)
+    stft.to(device)
     n_params = (
         sum(p.numel() for p in enc.parameters())
         + sum(p.numel() for p in rvq.parameters())
@@ -230,7 +238,7 @@ def main() -> None:
     print("-" * 80)
 
     for step in range(1, train_cfg["total_steps"] + 1):
-        x = next(data_iter)
+        x = next(data_iter).to(device, non_blocking=True)
         z = enc(x)
         q, idx, c_loss = rvq(z)
         x_hat = dec(q)
