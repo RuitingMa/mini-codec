@@ -52,7 +52,13 @@ def test_straight_through_gradient() -> None:
 
 
 def test_commitment_loss_is_positive() -> None:
-    vq = VectorQuantizer(codebook_size=64, dim=16, commitment_weight=1.0)
+    # Disable k-means init: with it on, the codebook is seeded directly
+    # from x and the commitment loss is identically zero on the first
+    # forward pass. We're testing the loss formula itself here, not the
+    # init path.
+    vq = VectorQuantizer(
+        codebook_size=64, dim=16, commitment_weight=1.0, kmeans_init=False
+    )
     x = torch.randn(2, 16, 10)
     _, _, loss = vq(x)
     # Random encoder output vs near-zero-init codebook will have a clearly
