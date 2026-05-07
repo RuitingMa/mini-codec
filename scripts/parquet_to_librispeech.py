@@ -13,10 +13,13 @@ Run after ``hf download --type dataset openslr/librispeech_asr ...``:
         --dst datasets/LibriSpeech/train-clean-100
 
 The HF schema for this dataset (openslr/librispeech_asr) carries one row
-per utterance with at least ``file`` (original .flac path under the
-LibriSpeech tree) and ``audio`` (struct with ``bytes`` of FLAC-encoded
-audio plus ``path``). The ``file`` column directly tells us the target
-relative path, so this script is little more than a parquet -> file write.
+per utterance with:
+  - ``audio`` struct: ``{bytes: <FLAC-encoded>, path: <just filename>}``
+  - ``speaker_id`` int, ``chapter_id`` int, ``id`` string (e.g. ``374-180298-0000``)
+  - ``text``, ``file`` (absolute path from the upload machine, not portable)
+
+The target FLAC path is ``<dst>/<speaker_id>/<chapter_id>/<id>.flac``,
+which matches exactly what ``LibriSpeechSegments`` discovers via rglob.
 """
 
 from __future__ import annotations
@@ -89,43 +92,30 @@ def convert(src: Path, dst: Path) -> None:
 
     n_written = 0
     for shard in parquets:
-        # Pull only the columns we need. Loading all rows into memory is fine
-        # here — each shard is ~450 MB and we only keep the audio bytes long
-        # enough to write them to disk.
-        table = pq.read_table(shard, columns=["file", "audio"])
+        # Pull only the columns we need. Each shard is ~450 MB on disk and
+        # ~1 GB once decoded into Python lists; processing one at a time
+        # keeps peak memory predictable.
+        table = pq.read_table(
+            shard, columns=["audio", "speaker_id", "chapter_id", "id"]
+        )
         n_rows = table.num_rows
         print(f"\n{shard.name}: {n_rows:,} utterances")
 
-        files_col = table.column("file").to_pylist()
         audio_col = table.column("audio").to_pylist()
+        spk_col = table.column("speaker_id").to_pylist()
+        chap_col = table.column("chapter_id").to_pylist()
+        id_col = table.column("id").to_pylist()
 
-        for rel_path, audio in tqdm(
-            zip(files_col, audio_col), total=n_rows, unit="utt"
+        for audio, spk, chap, utt_id in tqdm(
+            zip(audio_col, spk_col, chap_col, id_col), total=n_rows, unit="utt"
         ):
-            # `rel_path` looks like 'train-clean-100/19/198/19-198-0000.flac'
-            # — strip the split prefix so it lands directly under `dst`.
-            parts = Path(rel_path).parts
-            if parts and parts[0] in {
-                "train-clean-100",
-                "train-clean-360",
-                "train-other-500",
-                "dev-clean",
-                "dev-other",
-                "test-clean",
-                "test-other",
-            }:
-                relative = Path(*parts[1:])
-            else:
-                relative = Path(rel_path)
-
-            target = dst / relative
+            target = dst / str(spk) / str(chap) / f"{utt_id}.flac"
             target.parent.mkdir(parents=True, exist_ok=True)
             audio_bytes = audio["bytes"] if isinstance(audio, dict) else audio
             if audio_bytes is None:
                 raise RuntimeError(
-                    f"row for {rel_path} has no audio bytes — schema may not "
-                    "match what this script expects; rerun with --inspect-only "
-                    "to see the actual columns."
+                    f"row for id={utt_id} has no audio bytes — schema may not "
+                    "match what this script expects; rerun with --inspect-only."
                 )
             target.write_bytes(audio_bytes)
             n_written += 1
