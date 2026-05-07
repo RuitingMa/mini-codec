@@ -36,6 +36,19 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--total-steps", type=int, default=None)
     p.add_argument("--batch-size", type=int, default=None)
     p.add_argument("--lr", type=float, default=None)
+    p.add_argument(
+        "--split",
+        type=str,
+        default=None,
+        help="Override data.split, e.g. 'train-clean-100' or 'test-clean'.",
+    )
+    p.add_argument(
+        "--ckpt-every",
+        type=int,
+        default=None,
+        help="Steps between checkpoint dumps; useful to stop the smoke "
+        "config's every-100-steps default from spamming on long runs.",
+    )
     p.add_argument("--out-dir", type=Path, default=None)
     p.add_argument(
         "--logger",
@@ -59,6 +72,10 @@ def load_config(path: Path, args: argparse.Namespace) -> dict:
         cfg["data"]["batch_size"] = args.batch_size
     if args.lr is not None:
         cfg["optim"]["lr"] = args.lr
+    if args.split is not None:
+        cfg["data"]["split"] = args.split
+    if args.ckpt_every is not None:
+        cfg["train"]["ckpt_every"] = args.ckpt_every
     if args.out_dir is not None:
         cfg["train"]["out_dir"] = str(args.out_dir)
     if args.logger is not None:
