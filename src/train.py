@@ -50,6 +50,18 @@ def parse_args() -> argparse.Namespace:
         help="Steps between checkpoint dumps; useful to stop the smoke "
         "config's every-100-steps default from spamming on long runs.",
     )
+    p.add_argument(
+        "--perceptual-layer",
+        type=int,
+        default=None,
+        help="Override loss.perceptual.layer for HuBERT layer sweeps.",
+    )
+    p.add_argument(
+        "--perceptual-weight",
+        type=float,
+        default=None,
+        help="Override loss.perceptual_weight (lambda) for the additive run.",
+    )
     p.add_argument("--out-dir", type=Path, default=None)
     p.add_argument(
         "--logger",
@@ -66,7 +78,10 @@ def parse_args() -> argparse.Namespace:
 
 
 def load_config(path: Path, args: argparse.Namespace) -> dict:
-    cfg = yaml.safe_load(path.read_text())
+    # Explicit UTF-8 so config files with non-ASCII comments (em-dashes,
+    # CJK notes, etc.) are readable on Windows where the default text
+    # encoding is GBK rather than UTF-8.
+    cfg = yaml.safe_load(path.read_text(encoding="utf-8"))
     if args.total_steps is not None:
         cfg["train"]["total_steps"] = args.total_steps
     if args.batch_size is not None:
@@ -79,6 +94,10 @@ def load_config(path: Path, args: argparse.Namespace) -> dict:
         cfg["train"]["ckpt_every"] = args.ckpt_every
     if args.out_dir is not None:
         cfg["train"]["out_dir"] = str(args.out_dir)
+    if args.perceptual_layer is not None:
+        cfg["loss"].setdefault("perceptual", {})["layer"] = args.perceptual_layer
+    if args.perceptual_weight is not None:
+        cfg["loss"]["perceptual_weight"] = args.perceptual_weight
     if args.logger is not None:
         cfg["logger"]["type"] = args.logger
     if args.wandb:
@@ -184,7 +203,9 @@ def main() -> None:
     torch.manual_seed(cfg["train"]["seed"])
     out_dir = Path(cfg["train"]["out_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "config.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
+    (out_dir / "config.yaml").write_text(
+        yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8"
+    )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"device: {device}{' (' + torch.cuda.get_device_name(0) + ')' if device.type == 'cuda' else ''}")
