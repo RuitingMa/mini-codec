@@ -48,3 +48,7 @@ docs/
 *.log
 *.out
 *.synctex.gz
+
+# Eval result archives scp'd back from training runs.
+*.tar.gz
+*.tgz
