@@ -1,0 +1,61 @@
+# W5 experiment B (replacement): baseline_train100 with STFT replaced by
+# HuBERT perceptual loss.
+#
+# Question this run answers: is the perceptual term *strictly stronger*
+# than multi-scale STFT, or only complementary? If swap_stft underperforms
+# baseline, the perceptual loss is being gamed by the model and the
+# additive variant's gains are partly from STFT, not perceptual.
+
+data:
+  root: datasets
+  split: train-clean-100
+  sample_rate: 16000
+  segment_seconds: 1.0
+  batch_size: 16
+  num_workers: 8
+
+model:
+  encoder:
+    base_channels: 32
+    strides: [2, 4, 5, 5]
+    latent_dim: 128
+  decoder:
+    base_channels: 32
+    strides: [2, 4, 5, 5]
+    latent_dim: 128
+  quantizer:
+    num_quantizers: 4
+    codebook_size: 1024
+    decay: 0.99
+    dead_code_steps: 20
+    dead_code_threshold: 0.01
+
+loss:
+  l1_weight: 0.1
+  stft_weight: 0.0             # disabled — perceptual replaces STFT
+  commitment_weight: 1.0
+  perceptual_weight: 1.0
+  perceptual:
+    layer: 6
+  stft:
+    window_sizes: [64, 128, 256, 512, 1024, 2048]
+    n_mels: 64
+
+optim:
+  lr: 3.0e-4
+  betas: [0.9, 0.99]
+
+train:
+  total_steps: 50000
+  log_every: 100
+  ckpt_every: 5000
+  out_dir: outputs/exp_b_swap_stft
+  seed: 0
+
+logger:
+  type: tensorboard
+
+  wandb:
+    project: mini-codec
+    entity: rmaa0045-monash-university
+    run_name: exp_b_swap_stft_l6

@@ -24,6 +24,7 @@ import yaml
 from torch.utils.data import DataLoader
 
 from src.data.librispeech import LibriSpeechSegments
+from src.losses.perceptual import PerceptualLoss
 from src.losses.stft import MultiScaleMelLoss
 from src.models.decoder import Decoder
 from src.models.encoder import Encoder
@@ -221,6 +222,22 @@ def main() -> None:
     rvq.to(device)
     dec.to(device)
     stft.to(device)
+
+    # Optional W5 perceptual term — only built when its weight > 0 so
+    # baseline runs don't pay the HuBERT load / forward cost.
+    percep_weight = float(cfg["loss"].get("perceptual_weight", 0.0))
+    percep: PerceptualLoss | None = None
+    if percep_weight > 0.0:
+        percep_cfg = cfg["loss"].get("perceptual", {})
+        percep = PerceptualLoss(
+            layer=int(percep_cfg.get("layer", 6)),
+            sample_rate=d["sample_rate"],
+        ).to(device)
+        print(
+            f"perceptual loss: HuBERT base layer {percep.layer}, "
+            f"weight {percep_weight}"
+        )
+
     n_params = (
         sum(p.numel() for p in enc.parameters())
         + sum(p.numel() for p in rvq.parameters())
@@ -248,11 +265,12 @@ def main() -> None:
     t0 = time.perf_counter()
 
     print(f"\nstarting training: {train_cfg['total_steps']} steps")
-    print(
-        f"{'step':>6} | {'L1':>7} | {'STFT':>7} | {'commit':>7} | "
-        f"{'total':>7} | active codes per layer"
-    )
-    print("-" * 80)
+    header = f"{'step':>6} | {'L1':>7} | {'STFT':>7} | {'commit':>7}"
+    if percep is not None:
+        header += f" | {'percep':>7}"
+    header += f" | {'total':>7} | active codes per layer"
+    print(header)
+    print("-" * len(header))
 
     for step in range(1, train_cfg["total_steps"] + 1):
         x = next(data_iter).to(device, non_blocking=True)
@@ -267,6 +285,11 @@ def main() -> None:
             + loss_w["stft_weight"] * s
             + loss_w["commitment_weight"] * c_loss
         )
+        if percep is not None:
+            p_loss = percep(x, x_hat)
+            loss = loss + percep_weight * p_loss
+        else:
+            p_loss = None
         opt.zero_grad()
         loss.backward()
         opt.step()
@@ -275,23 +298,27 @@ def main() -> None:
             active = [
                 int(idx[:, i].unique().numel()) for i in range(rvq.num_quantizers)
             ]
-            print(
+            row = (
                 f"{step:>6} | {l1.item():>7.4f} | {s.item():>7.4f} | "
-                f"{c_loss.item():>7.4f} | {loss.item():>7.4f} | {active}"
+                f"{c_loss.item():>7.4f}"
             )
-            logger.log(
-                {
-                    "loss/l1": l1.item(),
-                    "loss/stft": s.item(),
-                    "loss/commit": c_loss.item(),
-                    "loss/total": loss.item(),
-                    **{
-                        f"codebook/active_layer_{i}": a
-                        for i, a in enumerate(active)
-                    },
+            if p_loss is not None:
+                row += f" | {p_loss.item():>7.4f}"
+            row += f" | {loss.item():>7.4f} | {active}"
+            print(row)
+            log_dict = {
+                "loss/l1": l1.item(),
+                "loss/stft": s.item(),
+                "loss/commit": c_loss.item(),
+                "loss/total": loss.item(),
+                **{
+                    f"codebook/active_layer_{i}": a
+                    for i, a in enumerate(active)
                 },
-                step=step,
-            )
+            }
+            if p_loss is not None:
+                log_dict["loss/perceptual"] = p_loss.item()
+            logger.log(log_dict, step=step)
 
         if (
             step % train_cfg["ckpt_every"] == 0
