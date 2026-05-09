@@ -66,6 +66,13 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
+def find_eval_root(p: Path) -> Path:
+    """Resolve the eval root from either ``<eval_dir>`` or ``<eval_dir>/samples``."""
+    if (p.parent / "per_sample.csv").exists() and p.name == "samples":
+        return p.parent
+    return p
+
+
 def find_samples_dir(p: Path) -> Path:
     """Accept both ``eval_dir`` and ``eval_dir/samples`` as input."""
     if (p / "samples").is_dir():
@@ -73,9 +80,28 @@ def find_samples_dir(p: Path) -> Path:
     return p
 
 
-def collect_pairs(samples_dir: Path, mel_l1: MultiScaleMelLoss) -> list[dict]:
-    """For each ``XXX_input.wav`` / ``XXX_recon.wav`` pair under ``samples_dir``,
-    compute SI-SDR and Mel L1 and return rows sorted by index."""
+def collect_metrics(eval_dir: Path, mel_l1: MultiScaleMelLoss) -> list[dict]:
+    """Return per-sample (idx, sdr, mel) rows, preferring ``per_sample.csv``
+    written by ``scripts/eval.py`` (covers the full --num-samples set, not
+    just the dumped wav pairs). Falls back to recomputing from the dumped
+    wavs when the CSV is absent (older eval directories)."""
+    root = find_eval_root(eval_dir)
+    csv_path = root / "per_sample.csv"
+    if csv_path.exists():
+        rows = []
+        with csv_path.open() as f:
+            for r in csv.DictReader(f):
+                rows.append(
+                    {
+                        "idx": int(r["idx"]),
+                        "sdr": float(r["si_sdr_db"]),
+                        "mel": float(r["mel_l1"]),
+                    }
+                )
+        return sorted(rows, key=lambda r: r["idx"])
+
+    # Fallback: recompute from whatever wav pairs were dumped.
+    samples_dir = find_samples_dir(eval_dir)
     rows = []
     for p_in in sorted(samples_dir.glob("*_input.wav")):
         idx = int(p_in.stem.split("_")[0])
@@ -84,7 +110,6 @@ def collect_pairs(samples_dir: Path, mel_l1: MultiScaleMelLoss) -> list[dict]:
             continue
         x_in, _ = sf.read(p_in, dtype="float32")
         x_re, _ = sf.read(p_re, dtype="float32")
-        # Trim to the shorter of the two so a stray sample doesn't break SDR.
         n = min(len(x_in), len(x_re))
         x_in, x_re = x_in[:n], x_re[:n]
         xi = torch.from_numpy(x_in).unsqueeze(0).unsqueeze(0)
@@ -94,11 +119,24 @@ def collect_pairs(samples_dir: Path, mel_l1: MultiScaleMelLoss) -> list[dict]:
                 "idx": idx,
                 "sdr": si_sdr_db(xi, xr).item(),
                 "mel": mel_l1(xi, xr).item(),
-                "x_in": x_in,
-                "x_re": x_re,
             }
         )
     return sorted(rows, key=lambda r: r["idx"])
+
+
+def load_wav_pair(eval_dir: Path, idx: int) -> tuple | None:
+    """Load one ``XXX_input.wav`` / ``XXX_recon.wav`` pair for spectrogram
+    plotting; returns ``(x_in, x_re)`` numpy arrays or ``None`` if either
+    file is missing (likely the case for indices beyond ``--num-dump``)."""
+    samples_dir = find_samples_dir(eval_dir)
+    p_in = samples_dir / f"{idx:03d}_input.wav"
+    p_re = samples_dir / f"{idx:03d}_recon.wav"
+    if not (p_in.exists() and p_re.exists()):
+        return None
+    x_in, _ = sf.read(p_in, dtype="float32")
+    x_re, _ = sf.read(p_re, dtype="float32")
+    n = min(len(x_in), len(x_re))
+    return x_in[:n], x_re[:n]
 
 
 def stft_db(x: np.ndarray, n_fft: int = 1024, hop: int = 256) -> np.ndarray:
@@ -187,16 +225,22 @@ def plot_spectrogram_triplet(
     label: str,
     ref_idx: int,
     data: dict[str, list[dict]],
+    eval_dirs_by_name: dict[str, Path],
     names: list[str],
     out_path: Path,
-) -> None:
+) -> bool:
     """Plot ``input`` + one ``recon`` per experiment, all sharing the same
-    colour scale. ``ref_idx`` selects which utterance to compare across."""
-    # Find the input from the first experiment that has this idx (they should
-    # all match — eval.py uses random_crop=False with seed 0).
-    first = next(iter(data.values()))
-    ref = next(r for r in first if r["idx"] == ref_idx)
-    x_in = ref["x_in"]
+    colour scale. ``ref_idx`` selects which utterance to compare across.
+
+    Wav data is loaded on demand (so this works even when per-sample
+    metrics came from per_sample.csv covering more samples than were
+    dumped). Returns False if the required input wav isn't dumped, so
+    the caller can pick a different ref idx."""
+    first_name = names[0]
+    in_pair = load_wav_pair(eval_dirs_by_name[first_name], ref_idx)
+    if in_pair is None:
+        return False
+    x_in, _ = in_pair
     S_in = stft_db(x_in)
     vmax = S_in.max()
     vmin = vmax - 80
@@ -217,26 +261,31 @@ def plot_spectrogram_triplet(
     axes[0].set_xlabel("time (s)")
 
     for i, name in enumerate(names):
-        match = [r for r in data[name] if r["idx"] == ref_idx]
-        if not match:
-            axes[i + 1].set_title(f"{name} (idx {ref_idx} missing)")
+        sdr = next(
+            (r["sdr"] for r in data[name] if r["idx"] == ref_idx), None
+        )
+        pair = load_wav_pair(eval_dirs_by_name[name], ref_idx)
+        if pair is None:
+            axes[i + 1].set_title(f"{name} (idx {ref_idx} not dumped)")
             continue
-        r = match[0]
+        _, x_re = pair
+        sdr_str = f"{sdr:.1f} dB" if sdr is not None else "?? dB"
         axes[i + 1].imshow(
-            stft_db(r["x_re"]),
+            stft_db(x_re),
             aspect="auto",
             origin="lower",
             vmin=vmin,
             vmax=vmax,
-            extent=[0, len(r["x_re"]) / 16000, 0, 8000],
+            extent=[0, len(x_re) / 16000, 0, 8000],
             cmap="magma",
         )
-        axes[i + 1].set_title(f"{name} (SI-SDR {r['sdr']:.1f} dB)")
+        axes[i + 1].set_title(f"{name} (SI-SDR {sdr_str})")
         axes[i + 1].set_xlabel("time (s)")
 
     fig.tight_layout()
     fig.savefig(out_path, dpi=120, bbox_inches="tight")
     plt.close(fig)
+    return True
 
 
 def main() -> None:
@@ -248,13 +297,19 @@ def main() -> None:
     mel_l1 = MultiScaleMelLoss(sample_rate=16000, l2_weight=0.0)
 
     data: dict[str, list[dict]] = {}
+    eval_dirs_by_name: dict[str, Path] = {}
     for name, eval_dir in zip(args.names, args.eval_dirs):
-        samples = find_samples_dir(eval_dir)
-        rows = collect_pairs(samples, mel_l1)
+        rows = collect_metrics(eval_dir, mel_l1)
         if not rows:
-            raise RuntimeError(f"no input/recon pairs found under {samples}")
+            raise RuntimeError(f"no per-sample data found under {eval_dir}")
         data[name] = rows
-        print(f"  {name:<14} {len(rows)} pairs from {samples}")
+        eval_dirs_by_name[name] = eval_dir
+        src = (
+            "per_sample.csv"
+            if (find_eval_root(eval_dir) / "per_sample.csv").exists()
+            else "wav fallback"
+        )
+        print(f"  {name:<14} {len(rows):>4} rows from {src}  ({eval_dir})")
 
     write_summary(data, args.out)
     csv_path = write_per_sample_csv(data, args.out)
@@ -263,19 +318,42 @@ def main() -> None:
     plot_mel_box(data, args.out / "mel_l1_box.png")
     print(f"wrote sdr_hist.png + mel_l1_box.png under {args.out}")
 
-    # Pick worst / median / best from the FIRST named experiment as the
-    # reference for cross-experiment spectrogram comparisons.
+    # Pick worst / median / best from the FIRST named experiment, restricted
+    # to indices whose wav was dumped (so the spectrogram panels actually
+    # have audio to render). For each target rank we try the exact rank
+    # first and then walk outward, so e.g. when num_dump=32 but we have CSV
+    # scores for 256, the picks still resolve to the closest dumped sample
+    # to the target percentile.
     first_name = args.names[0]
+    first_eval_dir = eval_dirs_by_name[first_name]
     sorted_first = sorted(data[first_name], key=lambda r: r["sdr"])
+    n = len(sorted_first)
+
+    def _pick_near(target_rank: int) -> int | None:
+        for offset in range(n):
+            for direction in (0, +1, -1) if offset == 0 else (+1, -1):
+                i = target_rank + direction * offset
+                if 0 <= i < n:
+                    idx = sorted_first[i]["idx"]
+                    if load_wav_pair(first_eval_dir, idx) is not None:
+                        return idx
+        return None
+
     picks = [
-        ("worst", sorted_first[0]["idx"]),
-        ("median", sorted_first[len(sorted_first) // 2]["idx"]),
-        ("best", sorted_first[-1]["idx"]),
+        (label, idx)
+        for label, idx in [
+            ("worst", _pick_near(0)),
+            ("median", _pick_near(n // 2)),
+            ("best", _pick_near(n - 1)),
+        ]
+        if idx is not None
     ]
     for label, idx in picks:
         path = args.out / f"spectrogram_{label}_{idx:03d}.png"
-        plot_spectrogram_triplet(label, idx, data, args.names, path)
-        print(f"wrote {path}")
+        if plot_spectrogram_triplet(label, idx, data, eval_dirs_by_name, args.names, path):
+            print(f"wrote {path}")
+        else:
+            print(f"skipped {label} (idx {idx} wav not dumped)")
 
 
 if __name__ == "__main__":

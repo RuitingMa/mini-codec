@@ -16,6 +16,7 @@ Run:
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import math
 import sys
@@ -172,20 +173,44 @@ def main() -> None:
         "split": args.split,
         "num_samples": n_eval,
         "si_sdr_mean_db": float(si_sdrs_t.mean()),
+        "si_sdr_median_db": float(si_sdrs_t.median()),
         "si_sdr_std_db": float(si_sdrs_t.std()),
+        "si_sdr_min_db": float(si_sdrs_t.min()),
+        "si_sdr_max_db": float(si_sdrs_t.max()),
         "mel_l1_mean": float(mels_t.mean()),
+        "mel_l1_median": float(mels_t.median()),
         "mel_l1_std": float(mels_t.std()),
         "bitrate_bps": float(bitrate),
     }
 
+    # Persist per-sample numbers so downstream analyses (compare_evals,
+    # paired statistical tests) don't have to re-decode the dumped wavs
+    # (which is also the only way to get scores for the >num_dump tail
+    # of utterances that are *evaluated* but not dumped).
+    per_sample_path = out_dir / "per_sample.csv"
+    with per_sample_path.open("w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["idx", "si_sdr_db", "mel_l1"])
+        for i, (sdr, mel) in enumerate(zip(si_sdrs, mels)):
+            w.writerow([i, f"{sdr:.4f}", f"{mel:.4f}"])
+
     print()
-    print(f"  SI-SDR  : {metrics['si_sdr_mean_db']:>7.2f} +/- {metrics['si_sdr_std_db']:>5.2f} dB")
-    print(f"  Mel L1  : {metrics['mel_l1_mean']:>7.4f} +/- {metrics['mel_l1_std']:>6.4f}")
+    print(
+        f"  SI-SDR  : mean {metrics['si_sdr_mean_db']:>7.2f}  "
+        f"median {metrics['si_sdr_median_db']:>7.2f}  "
+        f"std {metrics['si_sdr_std_db']:>5.2f} dB"
+    )
+    print(
+        f"  Mel L1  : mean {metrics['mel_l1_mean']:>7.4f}  "
+        f"median {metrics['mel_l1_median']:>7.4f}  "
+        f"std {metrics['mel_l1_std']:>6.4f}"
+    )
     print(f"  bitrate : {metrics['bitrate_bps']:>7.0f} bps  ({metrics['bitrate_bps']/1000:.1f} kbps)")
     print(f"  dumped  : {min(args.num_dump, n_eval)} input/recon wav pairs to {samples_dir}")
 
     (out_dir / "metrics.json").write_text(json.dumps(metrics, indent=2))
     print(f"  metrics : {out_dir / 'metrics.json'}")
+    print(f"  per-sample CSV : {per_sample_path}")
 
 
 if __name__ == "__main__":
