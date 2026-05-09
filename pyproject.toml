@@ -36,6 +36,12 @@ metrics = [
     "pesq>=0.0.4",
     "pystoi>=0.4",
 ]
+hf = [
+    # HuggingFace fallback for the perceptual loss backend; only required
+    # when configs/exp_b_*.yaml's loss.perceptual.backend is 'huggingface'
+    # (e.g. on AutoDL CN regions where the torchaudio Meta CDN is gated).
+    "transformers>=4.30",
+]
 
 [build-system]
 requires = ["hatchling"]

@@ -35,6 +35,8 @@ loss:
   perceptual_weight: 1.0       # new — additive perceptual term
   perceptual:
     layer: 6                   # HuBERT base layer 6 (phonetic mid-layer)
+    backend: torchaudio        # 'torchaudio' (Meta CDN) or 'huggingface' (HF mirror friendly)
+    hf_repo: facebook/hubert-base-ls960
   stft:
     window_sizes: [64, 128, 256, 512, 1024, 2048]
     n_mels: 64

@@ -2,10 +2,13 @@
 
 The loss is the L1 distance between intermediate features extracted from
 ``x`` and ``x_hat`` by a pretrained self-supervised audio encoder
-(``torchaudio.pipelines.HUBERT_BASE`` by default). The encoder is frozen
-on construction — gradients flow through it back to ``x_hat`` so the codec
-can learn to satisfy the perceptual constraint, but no gradient ever
-accumulates on the encoder's own parameters.
+(``torchaudio.pipelines.HUBERT_BASE`` by default; switchable to a
+HuggingFace ``transformers`` HuBERT for environments where the
+torchaudio weight URL is unreachable, e.g. AutoDL CN regions where the
+Meta CDN is gated). The encoder is frozen on construction — gradients
+flow through it back to ``x_hat`` so the codec can learn to satisfy
+the perceptual constraint, but no gradient ever accumulates on the
+encoder's own parameters.
 
 Why this term exists for the mini-codec specifically: the W4 baseline (16 kHz
 LibriSpeech, 3.2 kbps, no GAN) recovered the spectral *envelope* well — Mel
@@ -30,6 +33,59 @@ import torch.nn as nn
 import torchaudio
 
 
+class _HuggingFaceHuBERTAdapter(nn.Module):
+    """Wraps ``transformers.HubertModel`` to expose torchaudio's
+    ``extract_features(waveforms, num_layers=N) -> (list[Tensor], None)``
+    contract, so ``PerceptualLoss`` can stay backend-agnostic.
+
+    Used when the torchaudio bundle's Meta CDN URL isn't reachable (e.g.
+    AutoDL CN regions); pair with ``HF_ENDPOINT=https://hf-mirror.com``
+    for the actual weight download.
+    """
+
+    def __init__(self, repo: str = "facebook/hubert-base-ls960") -> None:
+        super().__init__()
+        try:
+            from transformers import HubertModel
+        except ImportError as e:
+            raise ImportError(
+                "backend='huggingface' requires the transformers package. "
+                "Install with `pip install transformers` (or "
+                "`pip install -e \".[hf]\"` from the repo root)."
+            ) from e
+        self.model = HubertModel.from_pretrained(repo)
+
+    def extract_features(
+        self,
+        waveforms: torch.Tensor,
+        lengths: torch.Tensor | None = None,
+        num_layers: int | None = None,
+    ) -> tuple[list[torch.Tensor], None]:
+        out = self.model(waveforms, output_hidden_states=True)
+        # hidden_states: tuple of (n_transformer_layers + 1) tensors, where
+        # index 0 is the post-CNN embedding fed into layer 1. We follow the
+        # torchaudio convention: layer N output is index N (1-based).
+        layers = list(out.hidden_states[1:])
+        if num_layers is not None:
+            layers = layers[:num_layers]
+        return layers, None
+
+
+def _build_default_feature_model(
+    backend: str = "torchaudio",
+    hf_repo: str = "facebook/hubert-base-ls960",
+) -> nn.Module:
+    """Construct a frozen HuBERT-base feature model from the chosen backend."""
+    if backend == "torchaudio":
+        return torchaudio.pipelines.HUBERT_BASE.get_model()
+    if backend == "huggingface":
+        return _HuggingFaceHuBERTAdapter(hf_repo)
+    raise ValueError(
+        f"unknown perceptual loss backend: {backend!r} "
+        f"(expected 'torchaudio' or 'huggingface')"
+    )
+
+
 class PerceptualLoss(nn.Module):
     """L1 distance between hidden features of a frozen pretrained encoder.
 
@@ -44,6 +100,12 @@ class PerceptualLoss(nn.Module):
             implements ``extract_features(waveforms, num_layers=...)
             -> (list[Tensor], Optional[Tensor])``. Tests use a mock here so
             unit tests don't have to download the ~360 MB HuBERT weights.
+        backend: ``"torchaudio"`` (default) loads HuBERT base via
+            ``torchaudio.pipelines.HUBERT_BASE``, which downloads from
+            Meta's CDN. ``"huggingface"`` loads the same architecture from
+            ``transformers.HubertModel.from_pretrained(hf_repo)``, which
+            respects ``HF_ENDPOINT`` for mirror downloads.
+        hf_repo: HuggingFace model id used when ``backend='huggingface'``.
     """
 
     def __init__(
@@ -51,6 +113,8 @@ class PerceptualLoss(nn.Module):
         layer: int = 6,
         sample_rate: int = 16000,
         feature_model: nn.Module | None = None,
+        backend: str = "torchaudio",
+        hf_repo: str = "facebook/hubert-base-ls960",
     ) -> None:
         super().__init__()
         if layer < 1:
@@ -68,8 +132,7 @@ class PerceptualLoss(nn.Module):
             self.resample = None
 
         if feature_model is None:
-            bundle = torchaudio.pipelines.HUBERT_BASE
-            feature_model = bundle.get_model()
+            feature_model = _build_default_feature_model(backend, hf_repo)
         self.feature_model = feature_model
 
         # Freeze every parameter — we only need the forward pass.

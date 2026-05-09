@@ -115,3 +115,25 @@ def test_resample_path_for_non_16k_input() -> None:
     x_hat = torch.randn(1, 1, 24000)
     out = loss_fn(x, x_hat)
     assert torch.isfinite(out)
+
+
+def test_invalid_backend_raises() -> None:
+    from src.losses.perceptual import _build_default_feature_model
+
+    with pytest.raises(ValueError, match="unknown perceptual loss backend"):
+        _build_default_feature_model(backend="bogus")
+
+
+def test_huggingface_backend_helpful_error_when_transformers_missing() -> None:
+    """If `transformers` isn't installed and the user picks backend='huggingface',
+    we surface an actionable install hint rather than a bare ImportError."""
+    try:
+        import transformers  # noqa: F401
+
+        pytest.skip("transformers IS installed; this test only validates the missing-deps path")
+    except ImportError:
+        pass
+    from src.losses.perceptual import _HuggingFaceHuBERTAdapter
+
+    with pytest.raises(ImportError, match="transformers"):
+        _HuggingFaceHuBERTAdapter()

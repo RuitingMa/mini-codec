@@ -62,6 +62,13 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Override loss.perceptual_weight (lambda) for the additive run.",
     )
+    p.add_argument(
+        "--perceptual-backend",
+        choices=["torchaudio", "huggingface"],
+        default=None,
+        help="Override loss.perceptual.backend; useful when the torchaudio "
+        "Meta CDN is unreachable and you want to fall back to HF mirror.",
+    )
     p.add_argument("--out-dir", type=Path, default=None)
     p.add_argument(
         "--logger",
@@ -98,6 +105,8 @@ def load_config(path: Path, args: argparse.Namespace) -> dict:
         cfg["loss"].setdefault("perceptual", {})["layer"] = args.perceptual_layer
     if args.perceptual_weight is not None:
         cfg["loss"]["perceptual_weight"] = args.perceptual_weight
+    if args.perceptual_backend is not None:
+        cfg["loss"].setdefault("perceptual", {})["backend"] = args.perceptual_backend
     if args.logger is not None:
         cfg["logger"]["type"] = args.logger
     if args.wandb:
@@ -253,9 +262,12 @@ def main() -> None:
         percep = PerceptualLoss(
             layer=int(percep_cfg.get("layer", 6)),
             sample_rate=d["sample_rate"],
+            backend=str(percep_cfg.get("backend", "torchaudio")),
+            hf_repo=str(percep_cfg.get("hf_repo", "facebook/hubert-base-ls960")),
         ).to(device)
         print(
             f"perceptual loss: HuBERT base layer {percep.layer}, "
+            f"backend={percep_cfg.get('backend', 'torchaudio')}, "
             f"weight {percep_weight}"
         )
 
