@@ -4,8 +4,10 @@ A from-scratch PyTorch implementation of a neural audio codec
 (Encodec / SoundStream-style), trained on LibriSpeech and evaluated
 under deterministic test-clean splits.
 
-> **Status**: baseline pipeline trained and evaluated; a perceptual-loss
-> ablation against the baseline is being analysed.
+> **Status**: baseline trained and evaluated; perceptual-loss ablation
+> closed as a clean negative result; a four-point bitrate scan from
+> 1.6 kbps to 12.8 kbps gives a clean rate-distortion curve. Report
+> writeup is the remaining work.
 
 ## What's implemented
 
@@ -102,29 +104,65 @@ mini-codec/
 
 ## Current results
 
-Baseline on `train-clean-100`, evaluated on `test-clean` (256 utterances,
-deterministic crops, seed 0):
+All numbers below come from the `test-clean` split (256 utterances,
+deterministic crops, seed 0; each checkpoint trained for 50 000 steps
+on `train-clean-100`).
 
-| metric | value |
-|--------|-------|
-| SI-SDR | **-15.70 ± 10.37 dB** |
-| multi-scale Mel L1 | 0.40 ± 0.22 |
-| bitrate | 3.2 kbps |
+### Rate-distortion sweep
 
-These numbers are in the expected range for a GAN-less codec at this
-bitrate. Encodec's own ablation (§3.5 of the paper) reports roughly a
-6 dB SI-SDR loss when adversarial training is removed; this baseline
-is intentionally GAN-free, so the gap to published Encodec numbers
-absorbs that ~6 dB and an additional bitrate gap (Encodec's lowest
-published rate is 1.5–6 kbps with mixed train data).
+| bitrate | num quantizers | SI-SDR median (dB) | IQR (dB) | Mel L1 median |
+|---------|----------------|--------------------|----------|---------------|
+| 1.6 kbps  | 2  | -20.03 | 12.5 | 0.351 |
+| 3.2 kbps  | 4  | -14.10 | 12.1 | 0.309 |
+| 6.4 kbps  | 8  |  -6.63 |  9.7 | 0.256 |
+| 12.8 kbps | 16 |  -0.95 |  8.2 | 0.220 |
 
-A diagnostic note from the baseline analysis: per-sample multi-scale
-Mel L1 is tightly clustered (std = 0.009 across the dumped subset)
-while per-sample SI-SDR varies over a ~27 dB range. The spectral
-envelope is being reproduced consistently across utterances; phase
-and fine-time-structure are not. That gap is the textbook failure
-mode of GAN-less audio codecs at low bitrate, and it motivates the
-ongoing perceptual-loss ablation.
+The curve is approximately linear in log-bitrate at roughly **6 dB of
+SI-SDR per octave of bitrate**, and the inter-quartile range narrows
+from 12.5 dB at the low-bitrate end to 8.2 dB at the high-bitrate end —
+higher bitrates are not just more accurate but also more consistent
+across utterances. Plot: [`scripts/plot_rd_curve.py`](scripts/plot_rd_curve.py)
+output (`rd_curve_sdr.png`, `per_sample_delta.png`).
+
+The gap to Encodec's published with-GAN numbers (Table 4 of the paper,
+24 kHz mixed-data) narrows from ~21 dB at 1.6 kbps to ~13 dB at
+12.8 kbps. That's consistent with a story where adversarial loss
+contributes most where the information bottleneck is tightest — at low
+bitrate the discriminator's perceptual prior fills in detail the
+encoder physically cannot store; at high bitrate the encoder has
+enough bits that GAN provides relatively less.
+
+### Diagnostic finding from the baseline
+
+At 3.2 kbps, the per-sample multi-scale Mel L1 is **tightly clustered
+(std ≈ 0.009)** but per-sample SI-SDR ranges over **~30 dB** and is
+heavily right-tailed by silence-dominated outliers. Spectrograms of
+the input and reconstruction match in envelope structure but diverge
+in fine-time-structure — the textbook signature of phase / fine-time
+errors in a GAN-less codec.
+
+### Perceptual-loss ablation (closed as informative negative)
+
+To test whether features from a frozen self-supervised audio encoder
+could substitute for adversarial training in supplying phase-aware
+gradient, two variants of the 3.2 kbps baseline were trained: an
+**additive** version (`L1 + STFT + commit + perceptual`) and a
+**replacement** version (`L1 + commit + perceptual`, STFT off) using
+HuBERT-base layer-6 feature L1.
+
+- **Additive**: SI-SDR median -14.92 dB vs baseline -14.10 dB —
+  statistically indistinguishable change; Mel L1 marginally improved
+  (0.301 vs 0.309).
+- **Replacement**: SI-SDR median -30.12 dB — model collapses without
+  STFT, so the perceptual loss is independently too weak to support
+  codec training.
+
+Read together: HuBERT layer-6 features are **redundant with multi-scale
+STFT in the spectral envelope dimension** (the small Mel L1 gain) and
+do **not** add phase-aware gradient (no SI-SDR change). HuBERT-style
+self-supervised audio encoders, trained on ASR-leaning prediction
+objectives, encode envelope/phonetic content but not phase — so they
+cannot replace adversarial training for this failure mode.
 
 ## Limitations and scope
 
@@ -135,8 +173,10 @@ ongoing perceptual-loss ablation.
 - **Strict split discipline.** `train-clean-100` is the only training
   split; `dev-clean` is for monitoring during training; `test-clean`
   is reserved for the final reported numbers and was scored once.
-- **Single-condition baseline.** All numbers above come from one seed
-  and one bitrate. A bitrate sweep is on the followup list.
+- **Single seed.** Bitrate sweep covers four rates; each is one seed
+  and one training run. Variance across seeds is unmeasured.
+- **Speech only.** Training is on LibriSpeech (clean read speech);
+  generalisation to music or noisy speech is not characterised here.
 
 ## References
 
