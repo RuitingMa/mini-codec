@@ -1,0 +1,60 @@
+# W7 experiment D, lower-bitrate point: 2-layer RVQ -> 1.6 kbps target.
+#
+# Identical to baseline_train100.yaml except for model.quantizer.num_quantizers
+# (4 -> 2) and the per-experiment out_dir / run_name. All other knobs --
+# stride list, codebook size, decay, dead-code thresholds, optimizer, total
+# steps, segment length -- match exactly so the rate-distortion curve is a
+# clean apples-to-apples sweep.
+#
+# bitrate = 2 layers * log2(1024) * 80 Hz frame rate = 1600 bps
+
+data:
+  root: datasets
+  split: train-clean-100
+  sample_rate: 16000
+  segment_seconds: 1.0
+  batch_size: 16
+  num_workers: 8
+
+model:
+  encoder:
+    base_channels: 32
+    strides: [2, 4, 5, 5]
+    latent_dim: 128
+  decoder:
+    base_channels: 32
+    strides: [2, 4, 5, 5]
+    latent_dim: 128
+  quantizer:
+    num_quantizers: 2          # halved vs baseline (4)
+    codebook_size: 1024
+    decay: 0.99
+    dead_code_steps: 20
+    dead_code_threshold: 0.01
+
+loss:
+  l1_weight: 0.1
+  stft_weight: 1.0
+  commitment_weight: 1.0
+  stft:
+    window_sizes: [64, 128, 256, 512, 1024, 2048]
+    n_mels: 64
+
+optim:
+  lr: 3.0e-4
+  betas: [0.9, 0.99]
+
+train:
+  total_steps: 50000
+  log_every: 100
+  ckpt_every: 5000
+  out_dir: outputs/exp_d_1.6kbps
+  seed: 0
+
+logger:
+  type: tensorboard
+
+  wandb:
+    project: mini-codec
+    entity: rmaa0045-monash-university
+    run_name: exp_d_1.6kbps
