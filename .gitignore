@@ -48,6 +48,11 @@ docs/
 *.log
 *.out
 *.synctex.gz
+*.bbl
+*.blg
+*.toc
+*.fdb_latexmk
+*.fls
 
 # Eval result archives scp'd back from training runs.
 *.tar.gz
