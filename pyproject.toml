@@ -4,7 +4,7 @@ version = "0.0.1"
 description = "A from-scratch implementation of a neural audio codec (Encodec/SoundStream-style) with a focused improvement experiment."
 readme = "README.md"
 requires-python = ">=3.10"
-authors = [{ name = "Ruiti" }]
+authors = [{ name = "Ruiting Ma" }]
 license = { text = "MIT" }
 
 dependencies = [

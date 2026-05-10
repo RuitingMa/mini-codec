@@ -1,67 +1,150 @@
 # mini-codec
 
-A from-scratch implementation of a neural audio codec (Encodec / SoundStream-style),
-trained on a small speech subset, with one focused improvement experiment on top of the baseline.
+A from-scratch PyTorch implementation of a neural audio codec
+(Encodec / SoundStream-style), trained on LibriSpeech and evaluated
+under deterministic test-clean splits.
 
-> **Status**: 🚧 in progress — week 1 of an 11-week project.
+> **Status**: baseline pipeline trained and evaluated; a perceptual-loss
+> ablation against the baseline is being analysed.
 
-## What this is
+## What's implemented
 
-A compact, readable PyTorch implementation of:
+- **Encoder**: 1D conv stack with `weight_norm` on every convolution.
+  Downsampling factors `(2, 4, 5, 5)` give a 200× temporal compression,
+  i.e. 80 Hz frame rate at the project's 16 kHz native sample rate.
+- **Quantizer**: 4-layer Residual Vector Quantization, 1024 codes per
+  layer. Codebooks are updated by EMA (no autograd through them), seeded
+  k-means style from the first training batch, and protected from
+  collapse by a dual-trigger dead-code restart (consecutive-zero
+  streak ≥ 20 *or* EMA cluster size < 0.01). All non-obvious at our
+  scale — see `src/models/quantizer.py` for the long version.
+- **Decoder**: mirror image of the encoder using `ConvTranspose1d`,
+  with explicit handling of odd strides so the round-trip preserves
+  length to the sample.
+- **Losses**: time-domain L1 + multi-scale log-mel STFT (windows
+  `[64, 128, 256, 512, 1024, 2048]`) + RVQ commitment. An optional
+  HuBERT-base-layer-6 feature-matching perceptual loss is wired in
+  for the comparison experiment.
+- **Training**: `src/train.py` is yaml-driven; logger is one of
+  `none / tensorboard / wandb`; periodic checkpoints; HuBERT can be
+  loaded from torchaudio's bundle or HuggingFace (mirror-friendly).
+- **Evaluation**: deterministic test-clean scoring with SI-SDR +
+  multi-scale Mel L1, persisted as both `metrics.json` (aggregates)
+  and `per_sample.csv` (every utterance), plus dumped input/recon
+  wav pairs. Cross-experiment side-by-side via `scripts/compare_evals.py`.
+- **Tests**: 40 unit tests covering shape contracts, gradient flow,
+  EMA train/eval split, codebook restart, and the perceptual-loss
+  feature-model interface.
 
-- **Encoder**: 1D convolutional stack that downsamples a raw waveform into a latent sequence.
-- **Quantizer**: Residual Vector Quantization (RVQ) with multiple codebooks for tunable bitrate.
-- **Decoder**: a (near-)mirror image of the encoder using transposed convolutions.
-- **Training**: time-domain L1 + multi-scale STFT reconstruction losses + commitment loss.
+Total trainable parameters: **5.4 M** (encoder + RVQ + decoder). Target
+bitrate at the default config: **3.2 kbps** (4 layers × log₂(1024) bits ×
+80 Hz frame rate).
 
-After the baseline is working, one targeted research question is investigated end-to-end
-(candidate directions are tracked in [docs/plan.md](docs/plan.md)).
+## Quickstart
 
-## Why
+```bash
+# Environment
+conda create -n mini-codec python=3.11 -y
+conda activate mini-codec
+pip install -e ".[dev]"
 
-This repo is a research / portfolio project, not a production codec.
-Goals, in order:
+# Tests run on CPU in a few seconds
+pytest
 
-1. Demonstrate that I can implement a non-trivial generative audio model from first principles.
-2. Run a clean, well-controlled comparison experiment around one design choice.
-3. Produce a short technical report and a listenable demo.
+# LibriSpeech splits
+python scripts/download_librispeech.py --split dev-clean        # ~5h, monitor / sanity
+python scripts/download_librispeech.py --split train-clean-100  # ~100h, for real training
+python scripts/download_librispeech.py --split test-clean       # ~5h, held-out for final eval
+
+# Train (needs a GPU; ~35 min on a single RTX 4090)
+python -m src.train --config configs/baseline_train100.yaml --logger tensorboard
+
+# Eval on test-clean
+python scripts/eval.py --ckpt outputs/baseline_train100/ckpt_00050000.pt \
+    --split test-clean --num-samples 256 --num-dump 32
+
+# Cross-experiment compare (once multiple variants have been trained + evaluated)
+python scripts/compare_evals.py \
+    --eval-dirs outputs/baseline_train100/eval_ckpt_00050000 \
+                outputs/exp_b_perceptual/eval_ckpt_00050000 \
+    --names baseline +perceptual \
+    --out outputs/compare
+```
+
+CPU is sufficient for everything except training on `train-clean-100`.
+The default `pip install` pulls PyTorch CPU wheels; for GPU, install
+the appropriate `torch` / `torchaudio` wheel separately (e.g. cu128 on
+recent CUDA drivers) before — or with `--force-reinstall` after —
+`pip install -e .`.
 
 ## Project layout
 
 ```
 mini-codec/
-├── configs/        # YAML experiment configs (kept out of code)
+├── configs/
+│   ├── baseline.yaml              # dev-clean smoke / pipeline check
+│   ├── baseline_train100.yaml     # production baseline
+│   ├── exp_b_perceptual.yaml      # baseline + HuBERT perceptual loss (additive)
+│   └── exp_b_swap_stft.yaml       # STFT replaced by perceptual (anti-gaming control)
 ├── src/
-│   ├── models/     # encoder, decoder, quantizer (one file each)
-│   ├── losses/     # reconstruction + commitment losses
-│   ├── data/       # dataset / dataloader utilities
-│   └── train.py    # training entry point
-├── scripts/        # thin wrappers that launch experiments
-├── notebooks/      # exploratory analysis (not for shipping logic)
-└── tests/          # unit tests for the core modules
+│   ├── data/librispeech.py
+│   ├── models/{encoder,decoder,quantizer,blocks}.py
+│   ├── losses/{stft,perceptual}.py
+│   └── train.py
+├── scripts/
+│   ├── download_librispeech.py    # torchaudio standard layout
+│   ├── parquet_to_librispeech.py  # HuggingFace mirror → standard layout (CN-friendly)
+│   ├── smoke_overfit.py           # single-sample architecture sanity
+│   ├── eval.py                    # SI-SDR + Mel L1 + per-sample CSV + wav dump
+│   └── compare_evals.py           # cross-experiment side-by-side
+└── tests/                         # 40 unit tests, pytest
 ```
 
-## Quickstart
+## Current results
 
-```bash
-# create env (conda; Python 3.11)
-conda create -n mini-codec python=3.11 -y
-conda activate mini-codec
+Baseline on `train-clean-100`, evaluated on `test-clean` (256 utterances,
+deterministic crops, seed 0):
 
-# install project + dev tooling in editable mode
-pip install -e ".[dev]"
+| metric | value |
+|--------|-------|
+| SI-SDR | **-15.70 ± 10.37 dB** |
+| multi-scale Mel L1 | 0.40 ± 0.22 |
+| bitrate | 3.2 kbps |
 
-# run unit tests
-pytest
+These numbers are in the expected range for a GAN-less codec at this
+bitrate. Encodec's own ablation (§3.5 of the paper) reports roughly a
+6 dB SI-SDR loss when adversarial training is removed; this baseline
+is intentionally GAN-free, so the gap to published Encodec numbers
+absorbs that ~6 dB and an additional bitrate gap (Encodec's lowest
+published rate is 1.5–6 kbps with mixed train data).
 
-# train baseline (placeholder — config will land in W2-W3)
-python -m src.train --config configs/baseline.yaml
-```
+A diagnostic note from the baseline analysis: per-sample multi-scale
+Mel L1 is tightly clustered (std = 0.009 across the dumped subset)
+while per-sample SI-SDR varies over a ~27 dB range. The spectral
+envelope is being reproduced consistently across utterances; phase
+and fine-time-structure are not. That gap is the textbook failure
+mode of GAN-less audio codecs at low bitrate, and it motivates the
+ongoing perceptual-loss ablation.
 
-> The local env installs PyTorch CPU wheels by default; GPU training is intended
-> to run on Colab Pro / RunPod, with a separate setup documented closer to W3.
+## Limitations and scope
+
+- **No adversarial discriminator.** Adding a multi-STFT discriminator
+  (Encodec §3.3) is the standard way to lift phase quality, but
+  including it would broaden scope past the encoder / quantizer /
+  loss design questions this project is built around.
+- **Strict split discipline.** `train-clean-100` is the only training
+  split; `dev-clean` is for monitoring during training; `test-clean`
+  is reserved for the final reported numbers and was scored once.
+- **Single-condition baseline.** All numbers above come from one seed
+  and one bitrate. A bitrate sweep is on the followup list.
 
 ## References
 
-- Défossez et al., *High Fidelity Neural Audio Compression* (Encodec), 2022.
-- Zeghidour et al., *SoundStream: An End-to-End Neural Audio Codec*, 2021.
+- Défossez et al., *High Fidelity Neural Audio Compression* (Encodec),
+  2022. [arXiv:2210.13438](https://arxiv.org/abs/2210.13438).
+- Zeghidour et al., *SoundStream: An End-to-End Neural Audio Codec*,
+  2021. [arXiv:2107.03312](https://arxiv.org/abs/2107.03312).
+
+## License
+
+MIT — see [LICENSE](LICENSE).
