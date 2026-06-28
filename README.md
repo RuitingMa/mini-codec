@@ -4,10 +4,11 @@ A from-scratch PyTorch implementation of a neural audio codec
 (Encodec / SoundStream-style), trained on LibriSpeech and evaluated
 under deterministic test-clean splits.
 
-> **Status**: baseline trained and evaluated; perceptual-loss ablation
-> closed as a clean negative result; a four-point bitrate scan from
-> 1.6 kbps to 12.8 kbps gives a clean rate-distortion curve. Report
-> writeup is the remaining work.
+> **Status**: complete. Baseline trained and evaluated; perceptual-loss
+> ablation closed as a clean negative result; a four-point bitrate scan
+> from 1.6 kbps to 12.8 kbps gives a clean rate-distortion curve; and a
+> 6-page technical report writes the whole study up. See
+> [`report/main.pdf`](report/main.pdf).
 
 ## What's implemented
 
@@ -99,6 +100,10 @@ mini-codec/
 │   ├── smoke_overfit.py           # single-sample architecture sanity
 │   ├── eval.py                    # SI-SDR + Mel L1 + per-sample CSV + wav dump
 │   └── compare_evals.py           # cross-experiment side-by-side
+├── report/                        # 6-page technical report (LaTeX + PDF)
+│   ├── main.tex                   # source; `make` in report/ builds main.pdf
+│   ├── main.pdf                   # built writeup
+│   └── figures/                   # RD curve, per-sample delta, spectrograms
 └── tests/                         # 40 unit tests, pytest
 ```
 
@@ -177,6 +182,17 @@ cannot replace adversarial training for this failure mode.
   and one training run. Variance across seeds is unmeasured.
 - **Speech only.** Training is on LibriSpeech (clean read speech);
   generalisation to music or noisy speech is not characterised here.
+
+## Report
+
+The full writeup — *Phase Reconstruction in a GAN-less Neural Audio
+Codec: A Failure-Mode Analysis and Rate-Distortion Study* — lives in
+[`report/`](report/) as LaTeX. It motivates the GAN-less setting,
+locates the failure mode as phase / fine-time-structure error,
+presents the pre-registered HuBERT perceptual-loss ablation as a
+negative result, and reports the four-point rate-distortion sweep.
+Build with `make` inside `report/`, or read the committed
+[`report/main.pdf`](report/main.pdf).
 
 ## References
 
